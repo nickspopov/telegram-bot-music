@@ -7,7 +7,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import yt_dlp
 
@@ -18,6 +18,7 @@ LOGGER = logging.getLogger(__name__)
 URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
 FAT_UNSAFE_CHARS_RE = re.compile(r"[\\/:*?\"<>|\x00-\x1f]")
 WHITESPACE_RE = re.compile(r"\s+")
+VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,}$")
 YOUTUBE_HOSTS = {"youtube.com", "youtu.be", "youtube-nocookie.com"}
 MP4_SUFFIXES = {".m4a", ".mp4", ".m4b", ".mov"}
 
@@ -46,14 +47,34 @@ class AudioArtifact:
     validation: ValidationResult
 
 
+def _valid_video_id(value: Optional[str]) -> bool:
+    return bool(value and VIDEO_ID_RE.match(value))
+
+
 def is_youtube_url(url: str) -> bool:
     parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"}:
+    if parsed.scheme != "https":
         return False
     host = (parsed.hostname or "").lower()
     if host.startswith("www."):
         host = host[4:]
-    return host in YOUTUBE_HOSTS or host.endswith(".youtube.com") or host.endswith(".youtube-nocookie.com")
+
+    if host == "youtu.be":
+        video_id = parsed.path.strip("/").split("/", 1)[0]
+        return _valid_video_id(video_id)
+
+    if not (host in YOUTUBE_HOSTS or host.endswith(".youtube.com") or host.endswith(".youtube-nocookie.com")):
+        return False
+
+    path_parts = [part for part in parsed.path.split("/") if part]
+    if parsed.path == "/watch":
+        video_id = parse_qs(parsed.query).get("v", [None])[0]
+        return _valid_video_id(video_id)
+
+    if len(path_parts) >= 2 and path_parts[0] in {"shorts", "embed", "live"}:
+        return _valid_video_id(path_parts[1])
+
+    return False
 
 
 def extract_youtube_url(text: str) -> Optional[str]:
@@ -190,6 +211,7 @@ def process_youtube_url(url: str, output_dir: Path, settings: Settings) -> Audio
             "format": "bestaudio/best",
             "outtmpl": str(tmp / "source.%(ext)s"),
             "noplaylist": True,
+            "max_filesize": settings.max_source_bytes,
             "quiet": True,
             "no_warnings": True,
             "retries": 3,
@@ -202,7 +224,12 @@ def process_youtube_url(url: str, output_dir: Path, settings: Settings) -> Audio
                 info = ydl.extract_info(url, download=False)
                 if not isinstance(info, dict):
                     raise ProcessingError("yt-dlp returned no video metadata")
+                live_status = info.get("live_status")
+                if info.get("is_live") or live_status in {"is_live", "is_upcoming", "post_live"}:
+                    raise ProcessingError("Live/upcoming streams are not supported")
                 duration = info.get("duration")
+                if not isinstance(duration, (int, float)):
+                    raise ProcessingError("Could not determine video duration")
                 if isinstance(duration, (int, float)) and duration > settings.max_duration_seconds:
                     raise ProcessingError(
                         f"Video is too long ({int(duration)}s > {settings.max_duration_seconds}s limit)"

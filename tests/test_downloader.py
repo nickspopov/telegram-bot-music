@@ -2,9 +2,11 @@ from music_bot.downloader import extract_youtube_url, is_youtube_url, safe_filen
 
 
 def test_is_youtube_url_accepts_expected_hosts():
-    assert is_youtube_url("https://youtu.be/abc")
-    assert is_youtube_url("https://www.youtube.com/watch?v=abc")
-    assert is_youtube_url("https://music.youtube.com/watch?v=abc")
+    video_id = "dQw4w9WgXcQ"
+    assert is_youtube_url(f"https://youtu.be/{video_id}")
+    assert is_youtube_url(f"https://www.youtube.com/watch?v={video_id}")
+    assert is_youtube_url(f"https://music.youtube.com/watch?v={video_id}")
+    assert is_youtube_url(f"https://www.youtube.com/shorts/{video_id}")
 
 
 def test_is_youtube_url_rejects_lookalikes():
@@ -12,8 +14,15 @@ def test_is_youtube_url_rejects_lookalikes():
     assert not is_youtube_url("https://youtube.com.evil.test/watch?v=abc")
 
 
+def test_is_youtube_url_rejects_non_video_urls():
+    assert not is_youtube_url("http://youtube.com/watch?v=dQw4w9WgXcQ")
+    assert not is_youtube_url("https://www.youtube.com/playlist?list=PL123456789")
+    assert not is_youtube_url("https://www.youtube.com/@somechannel")
+    assert not is_youtube_url("https://www.youtube.com/results?search_query=test")
+
+
 def test_extract_youtube_url_from_text():
-    assert extract_youtube_url("listen https://youtu.be/abc?si=1 thanks") == "https://youtu.be/abc?si=1"
+    assert extract_youtube_url("listen https://youtu.be/dQw4w9WgXcQ?si=1 thanks") == "https://youtu.be/dQw4w9WgXcQ?si=1"
 
 
 def test_safe_filename_keeps_unicode_and_removes_fat_unsafe_chars():

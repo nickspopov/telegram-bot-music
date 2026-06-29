@@ -66,6 +66,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                     performer=artifact.performer[:64] if artifact.performer else None,
                     duration=artifact.duration,
                     caption=caption[:1024],
+                    connect_timeout=30,
+                    read_timeout=120,
+                    write_timeout=180,
+                    pool_timeout=30,
                 )
             await status.delete()
         except ProcessingError as exc:

@@ -21,6 +21,7 @@ def test_settings_from_env_defaults(monkeypatch):
     settings = Settings.from_env(require_token=False)
     assert settings.allowed_user_ids == {123456789, 987654321}
     assert settings.output_format == "mp3"
+    assert settings.max_source_bytes == 150 * 1024 * 1024
 
 
 def test_settings_requires_token(monkeypatch):

@@ -7,6 +7,7 @@ from typing import Dict, Set
 DEFAULT_ALLOWED_USER_IDS = "123456789,987654321"
 DEFAULT_MAX_DURATION_SECONDS = 30 * 60
 DEFAULT_MAX_OUTPUT_BYTES = 50 * 1024 * 1024
+DEFAULT_MAX_SOURCE_BYTES = 150 * 1024 * 1024
 
 
 class ConfigError(ValueError):
@@ -46,6 +47,7 @@ class Settings:
     output_format: str
     max_duration_seconds: int
     max_output_bytes: int
+    max_source_bytes: int
     workdir: Path
 
     @classmethod
@@ -68,5 +70,6 @@ class Settings:
             output_format=output_format,
             max_duration_seconds=_int_env(env, "MAX_DURATION_SECONDS", DEFAULT_MAX_DURATION_SECONDS),
             max_output_bytes=_int_env(env, "MAX_OUTPUT_BYTES", DEFAULT_MAX_OUTPUT_BYTES),
+            max_source_bytes=_int_env(env, "MAX_SOURCE_BYTES", DEFAULT_MAX_SOURCE_BYTES),
             workdir=workdir,
         )
