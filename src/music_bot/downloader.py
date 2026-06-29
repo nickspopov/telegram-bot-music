@@ -1,0 +1,265 @@
+import json
+import logging
+import re
+import shutil
+import subprocess
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional
+from urllib.parse import urlparse
+
+import yt_dlp
+
+from .config import Settings
+
+LOGGER = logging.getLogger(__name__)
+
+URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
+FAT_UNSAFE_CHARS_RE = re.compile(r"[\\/:*?\"<>|\x00-\x1f]")
+WHITESPACE_RE = re.compile(r"\s+")
+YOUTUBE_HOSTS = {"youtube.com", "youtu.be", "youtube-nocookie.com"}
+MP4_SUFFIXES = {".m4a", ".mp4", ".m4b", ".mov"}
+
+
+class ProcessingError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class ValidationResult:
+    ok: bool
+    codec: str
+    sample_rate: Optional[int]
+    channels: Optional[int]
+    major_brand: str
+    message: str
+
+
+@dataclass(frozen=True)
+class AudioArtifact:
+    path: Path
+    filename: str
+    title: str
+    performer: str
+    duration: Optional[int]
+    validation: ValidationResult
+
+
+def is_youtube_url(url: str) -> bool:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    host = (parsed.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host in YOUTUBE_HOSTS or host.endswith(".youtube.com") or host.endswith(".youtube-nocookie.com")
+
+
+def extract_youtube_url(text: str) -> Optional[str]:
+    for match in URL_RE.finditer(text or ""):
+        url = match.group(0).rstrip(".,;)]}>")
+        if is_youtube_url(url):
+            return url
+    return None
+
+
+def safe_filename(name: str, fallback: str = "audio", max_len: int = 120) -> str:
+    cleaned = FAT_UNSAFE_CHARS_RE.sub("_", name or "")
+    cleaned = WHITESPACE_RE.sub(" ", cleaned).strip(" ._")
+    if not cleaned:
+        cleaned = fallback
+    if len(cleaned) > max_len:
+        cleaned = cleaned[:max_len].rstrip(" ._")
+    return cleaned or fallback
+
+
+def ensure_tools_available() -> None:
+    missing = [cmd for cmd in ("ffmpeg", "ffprobe") if shutil.which(cmd) is None]
+    if missing:
+        raise ProcessingError("Missing required command(s): " + ", ".join(missing))
+
+
+def run_cmd(args: List[str], timeout: int = 600) -> subprocess.CompletedProcess:
+    LOGGER.debug("Running command: %s", " ".join(args[:2] + ["..."] if len(args) > 2 else args))
+    return subprocess.run(args, text=True, capture_output=True, timeout=timeout, check=False)
+
+
+def _ffprobe_json(path: Path) -> Dict[str, Any]:
+    proc = run_cmd([
+        "ffprobe",
+        "-v",
+        "error",
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
+        str(path),
+    ])
+    if proc.returncode != 0:
+        raise ProcessingError(f"ffprobe failed: {proc.stderr.strip() or proc.stdout.strip()}")
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise ProcessingError("ffprobe returned invalid JSON") from exc
+
+
+def _has_fragment_boxes(path: Path) -> bool:
+    if path.suffix.lower() not in MP4_SUFFIXES:
+        return False
+    proc = run_cmd(["ffprobe", "-v", "trace", str(path)], timeout=120)
+    trace = f"{proc.stdout}\n{proc.stderr}"
+    return "type:'moof'" in trace or "type:'sidx'" in trace
+
+
+def _first_audio_stream(probe: Dict[str, Any]) -> Dict[str, Any]:
+    for stream in probe.get("streams", []):
+        if stream.get("codec_type") == "audio":
+            return stream
+    raise ProcessingError("No audio stream found in output")
+
+
+def validate_audio_file(path: Path) -> ValidationResult:
+    if not path.exists() or path.stat().st_size <= 0:
+        raise ProcessingError("Output file is missing or empty")
+
+    probe = _ffprobe_json(path)
+    audio = _first_audio_stream(probe)
+    fmt = probe.get("format", {})
+    tags = fmt.get("tags", {}) or {}
+
+    codec = str(audio.get("codec_name") or "").lower()
+    profile = str(audio.get("profile") or "")
+    sample_rate_raw = audio.get("sample_rate")
+    sample_rate = int(sample_rate_raw) if str(sample_rate_raw or "").isdigit() else None
+    channels = audio.get("channels") if isinstance(audio.get("channels"), int) else None
+    major_brand = str(tags.get("major_brand") or "")
+
+    if codec == "mp3":
+        if sample_rate not in {44100, 48000}:
+            raise ProcessingError(f"MP3 sample rate {sample_rate} is outside safe 44.1/48 kHz profile")
+        if channels not in {1, 2}:
+            raise ProcessingError(f"MP3 channel count {channels} is unsupported")
+        return ValidationResult(True, codec, sample_rate, channels, major_brand, "OK: MP3 safe profile")
+
+    if codec == "aac":
+        if major_brand == "dash":
+            raise ProcessingError("REJECT: major_brand=dash")
+        if _has_fragment_boxes(path):
+            raise ProcessingError("REJECT: fragmented MP4 container has moof/sidx boxes")
+        if profile and profile != "LC":
+            raise ProcessingError(f"REJECT: AAC profile={profile!r}, want LC")
+        return ValidationResult(True, codec, sample_rate, channels, major_brand, "OK: AAC-LC non-fragmented profile")
+
+    raise ProcessingError(f"REJECT: unsupported codec {codec!r}")
+
+
+def _metadata_args(info: Dict[str, Any]) -> List[str]:
+    args: List[str] = []
+    title = info.get("title")
+    artist = info.get("artist") or info.get("creator") or info.get("uploader")
+    if title:
+        args.extend(["-metadata", f"title={title}"])
+    if artist:
+        args.extend(["-metadata", f"artist={artist}"])
+    return args
+
+
+def _pick_downloaded_file(directory: Path, ignored: Iterable[Path]) -> Path:
+    ignored_set = {p.resolve() for p in ignored}
+    candidates = [
+        p
+        for p in directory.iterdir()
+        if p.is_file() and p.resolve() not in ignored_set and not p.name.endswith((".part", ".ytdl"))
+    ]
+    if not candidates:
+        raise ProcessingError("yt-dlp did not produce an input file")
+    return max(candidates, key=lambda p: p.stat().st_size)
+
+
+def process_youtube_url(url: str, output_dir: Path, settings: Settings) -> AudioArtifact:
+    if not is_youtube_url(url):
+        raise ProcessingError("Only YouTube links are supported")
+
+    ensure_tools_available()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="yt-", dir=str(output_dir)) as tmp_raw:
+        tmp = Path(tmp_raw)
+        ydl_opts: Dict[str, Any] = {
+            "format": "bestaudio/best",
+            "outtmpl": str(tmp / "source.%(ext)s"),
+            "noplaylist": True,
+            "quiet": True,
+            "no_warnings": True,
+            "retries": 3,
+            "fragment_retries": 3,
+            "socket_timeout": 30,
+            "cachedir": False,
+        }
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                if not isinstance(info, dict):
+                    raise ProcessingError("yt-dlp returned no video metadata")
+                duration = info.get("duration")
+                if isinstance(duration, (int, float)) and duration > settings.max_duration_seconds:
+                    raise ProcessingError(
+                        f"Video is too long ({int(duration)}s > {settings.max_duration_seconds}s limit)"
+                    )
+                info = ydl.extract_info(url, download=True)
+        except yt_dlp.utils.DownloadError as exc:
+            raise ProcessingError(f"yt-dlp failed: {exc}") from exc
+
+        if not isinstance(info, dict):
+            raise ProcessingError("yt-dlp returned no video metadata")
+
+        source = _pick_downloaded_file(tmp, ignored=[])
+        title = str(info.get("title") or "YouTube audio")
+        performer = str(info.get("artist") or info.get("creator") or info.get("uploader") or "")
+        filename_base = safe_filename(title)
+        output_path = output_dir / f"{filename_base}.mp3"
+
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(source),
+            "-map",
+            "0:a:0",
+            "-vn",
+            "-c:a",
+            "libmp3lame",
+            "-b:a",
+            "320k",
+            "-ar",
+            "44100",
+            "-ac",
+            "2",
+            "-id3v2_version",
+            "3",
+            *_metadata_args(info),
+            str(output_path),
+        ]
+        proc = run_cmd(ffmpeg_cmd, timeout=900)
+        if proc.returncode != 0:
+            raise ProcessingError(f"ffmpeg failed: {proc.stderr.strip() or proc.stdout.strip()}")
+
+    if output_path.stat().st_size > settings.max_output_bytes:
+        output_path.unlink(missing_ok=True)
+        raise ProcessingError(
+            f"Converted file is too large for Telegram upload ({settings.max_output_bytes} byte limit)"
+        )
+
+    validation = validate_audio_file(output_path)
+    return AudioArtifact(
+        path=output_path,
+        filename=output_path.name,
+        title=title,
+        performer=performer,
+        duration=int(info["duration"]) if isinstance(info.get("duration"), (int, float)) else None,
+        validation=validation,
+    )

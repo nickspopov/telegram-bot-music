@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Runtime/temp
+.env
+*.mp3
+*.m4a
+*.webm
+*.part
+.cache/
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
