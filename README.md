@@ -20,8 +20,29 @@ OUTPUT_FORMAT=mp3
 MAX_DURATION_SECONDS=1800
 MAX_OUTPUT_BYTES=52428800
 MAX_SOURCE_BYTES=157286400
+YTDLP_COOKIES_B64=
+YTDLP_COOKIES_FILE=
+YTDLP_PROXY=
 MUSIC_BOT_WORKDIR=/tmp/music-bot
 ```
+
+## YouTube bot-check / cookies
+
+YouTube often blocks datacenter VPS IPs with `Sign in to confirm you’re not a bot` even when the same URL works from a home laptop. The bot supports two runtime-only workarounds:
+
+- `YTDLP_COOKIES_B64`: base64-encoded Netscape `cookies.txt` file; recommended for Coolify env vars.
+- `YTDLP_COOKIES_FILE`: path to a mounted Netscape `cookies.txt` file.
+- `YTDLP_PROXY`: optional proxy URL passed to yt-dlp, useful if the VPS IP itself is flagged.
+
+Export YouTube cookies from a private/incognito browser session and keep them secret. Do not commit them. Per yt-dlp guidance, a throwaway YouTube account is safer because cookies can be rate-limited or banned.
+
+On macOS/Linux, after exporting `cookies.txt`:
+
+```bash
+base64 < cookies.txt | tr -d '\n'
+```
+
+Paste the output into Coolify as `YTDLP_COOKIES_B64`, then redeploy.
 
 ## Local run
 
@@ -45,6 +66,7 @@ Recommended settings:
 - Runtime environment variables:
   - `TELEGRAM_BOT_TOKEN`
   - `ALLOWED_TELEGRAM_USER_IDS=123456789,987654321`
+  - `YTDLP_COOKIES_B64` if YouTube blocks the VPS as a bot
   - optional limits from `.env.example`
 
 ## Validation logic

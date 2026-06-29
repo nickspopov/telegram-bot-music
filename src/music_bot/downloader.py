@@ -1,3 +1,5 @@
+import base64
+import binascii
 import json
 import logging
 import re
@@ -198,6 +200,50 @@ def _pick_downloaded_file(directory: Path, ignored: Iterable[Path]) -> Path:
     return max(candidates, key=lambda p: p.stat().st_size)
 
 
+def _cookies_file_from_settings(settings: Settings, tmp: Path) -> Optional[Path]:
+    if settings.ytdlp_cookies_file:
+        if not settings.ytdlp_cookies_file.exists():
+            raise ProcessingError(f"YTDLP_COOKIES_FILE does not exist: {settings.ytdlp_cookies_file}")
+        return settings.ytdlp_cookies_file
+
+    if not settings.ytdlp_cookies_b64:
+        return None
+
+    try:
+        cookie_bytes = base64.b64decode(settings.ytdlp_cookies_b64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ProcessingError("YTDLP_COOKIES_B64 is not valid base64") from exc
+
+    if not cookie_bytes.startswith((b"# Netscape HTTP Cookie File", b"# HTTP Cookie File")):
+        raise ProcessingError("YTDLP_COOKIES_B64 must decode to a Netscape cookies.txt file")
+
+    cookies_path = tmp / "youtube-cookies.txt"
+    cookies_path.write_bytes(cookie_bytes)
+    cookies_path.chmod(0o600)
+    return cookies_path
+
+
+def _build_ydl_opts(settings: Settings, tmp: Path) -> Dict[str, Any]:
+    ydl_opts: Dict[str, Any] = {
+        "format": "bestaudio/best",
+        "outtmpl": str(tmp / "source.%(ext)s"),
+        "noplaylist": True,
+        "max_filesize": settings.max_source_bytes,
+        "quiet": True,
+        "no_warnings": True,
+        "retries": 3,
+        "fragment_retries": 3,
+        "socket_timeout": 30,
+        "cachedir": False,
+    }
+    cookies_file = _cookies_file_from_settings(settings, tmp)
+    if cookies_file:
+        ydl_opts["cookiefile"] = str(cookies_file)
+    if settings.ytdlp_proxy:
+        ydl_opts["proxy"] = settings.ytdlp_proxy
+    return ydl_opts
+
+
 def process_youtube_url(url: str, output_dir: Path, settings: Settings) -> AudioArtifact:
     if not is_youtube_url(url):
         raise ProcessingError("Only YouTube links are supported")
@@ -207,18 +253,7 @@ def process_youtube_url(url: str, output_dir: Path, settings: Settings) -> Audio
 
     with tempfile.TemporaryDirectory(prefix="yt-", dir=str(output_dir)) as tmp_raw:
         tmp = Path(tmp_raw)
-        ydl_opts: Dict[str, Any] = {
-            "format": "bestaudio/best",
-            "outtmpl": str(tmp / "source.%(ext)s"),
-            "noplaylist": True,
-            "max_filesize": settings.max_source_bytes,
-            "quiet": True,
-            "no_warnings": True,
-            "retries": 3,
-            "fragment_retries": 3,
-            "socket_timeout": 30,
-            "cachedir": False,
-        }
+        ydl_opts = _build_ydl_opts(settings, tmp)
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)

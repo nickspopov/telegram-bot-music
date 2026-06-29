@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Set
+from typing import Dict, Optional, Set
 
 
 DEFAULT_ALLOWED_USER_IDS = "123456789,987654321"
@@ -49,6 +49,9 @@ class Settings:
     max_output_bytes: int
     max_source_bytes: int
     workdir: Path
+    ytdlp_cookies_file: Optional[Path]
+    ytdlp_cookies_b64: str
+    ytdlp_proxy: str
 
     @classmethod
     def from_env(cls, require_token: bool = True) -> "Settings":
@@ -63,6 +66,10 @@ class Settings:
 
         allowed = parse_allowed_user_ids(env.get("ALLOWED_TELEGRAM_USER_IDS", DEFAULT_ALLOWED_USER_IDS))
         workdir = Path(env.get("MUSIC_BOT_WORKDIR", "/tmp/music-bot")).expanduser()
+        ytdlp_cookies_file_raw = env.get("YTDLP_COOKIES_FILE", "").strip()
+        ytdlp_cookies_b64 = env.get("YTDLP_COOKIES_B64", "").strip()
+        if ytdlp_cookies_file_raw and ytdlp_cookies_b64:
+            raise ConfigError("Set only one of YTDLP_COOKIES_FILE or YTDLP_COOKIES_B64")
 
         return cls(
             bot_token=token,
@@ -72,4 +79,7 @@ class Settings:
             max_output_bytes=_int_env(env, "MAX_OUTPUT_BYTES", DEFAULT_MAX_OUTPUT_BYTES),
             max_source_bytes=_int_env(env, "MAX_SOURCE_BYTES", DEFAULT_MAX_SOURCE_BYTES),
             workdir=workdir,
+            ytdlp_cookies_file=Path(ytdlp_cookies_file_raw).expanduser() if ytdlp_cookies_file_raw else None,
+            ytdlp_cookies_b64=ytdlp_cookies_b64,
+            ytdlp_proxy=env.get("YTDLP_PROXY", "").strip(),
         )
