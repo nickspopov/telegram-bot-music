@@ -227,6 +227,11 @@ def _build_ydl_opts(settings: Settings, tmp: Path) -> Dict[str, Any]:
     ydl_opts: Dict[str, Any] = {
         "format": "bestaudio/best",
         "outtmpl": str(tmp / "source.%(ext)s"),
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["web_embedded", "mweb"],
+            },
+        },
         "noplaylist": True,
         "max_filesize": settings.max_source_bytes,
         "quiet": True,

@@ -8,6 +8,7 @@ Telegram bot that accepts YouTube links from an allowlist, downloads best availa
 - Unauthorized users are ignored silently.
 - Uses long polling, so no public HTTP port or webhook is required.
 - Default output is **MP3 320 kbps CBR, 44.1 kHz, stereo** — the safest profile from `HIFI_WALKER_H2_file_spec.md`.
+- Includes Deno and yt-dlp's EJS challenge solver, and uses YouTube clients that avoid the broken default Android VR media URLs.
 - Rejects over-long videos and files above the configured Telegram upload limit.
 - Never commits or bakes the bot token into the image; set it as an environment variable.
 

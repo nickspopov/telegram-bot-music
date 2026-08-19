@@ -47,6 +47,7 @@ def test_build_ydl_opts_decodes_b64_cookies_and_proxy(monkeypatch, tmp_path):
     opts = _build_ydl_opts(settings, tmp_path)
 
     assert opts["proxy"] == "socks5://127.0.0.1:9050"
+    assert opts["extractor_args"]["youtube"]["player_client"] == ["web_embedded", "mweb"]
     cookiefile = tmp_path / "youtube-cookies.txt"
     assert opts["cookiefile"] == str(cookiefile)
     assert cookiefile.read_bytes() == cookies
