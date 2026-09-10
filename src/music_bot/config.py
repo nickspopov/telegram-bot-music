@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Dict, Optional, Set
 
 
-DEFAULT_ALLOWED_USER_IDS = "123456789,987654321"
 DEFAULT_MAX_DURATION_SECONDS = 30 * 60
 DEFAULT_MAX_OUTPUT_BYTES = 50 * 1024 * 1024
 DEFAULT_MAX_SOURCE_BYTES = 150 * 1024 * 1024
@@ -64,7 +63,10 @@ class Settings:
         if output_format != "mp3":
             raise ConfigError("Only OUTPUT_FORMAT=mp3 is currently supported")
 
-        allowed = parse_allowed_user_ids(env.get("ALLOWED_TELEGRAM_USER_IDS", DEFAULT_ALLOWED_USER_IDS))
+        allowed_raw = env.get("ALLOWED_TELEGRAM_USER_IDS", "").strip()
+        if not allowed_raw:
+            raise ConfigError("ALLOWED_TELEGRAM_USER_IDS is required (comma-separated Telegram user ids)")
+        allowed = parse_allowed_user_ids(allowed_raw)
         workdir = Path(env.get("MUSIC_BOT_WORKDIR", "/tmp/music-bot")).expanduser()
         ytdlp_cookies_file_raw = env.get("YTDLP_COOKIES_FILE", "").strip()
         ytdlp_cookies_b64 = env.get("YTDLP_COOKIES_B64", "").strip()

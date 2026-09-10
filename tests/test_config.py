@@ -16,7 +16,7 @@ def test_parse_allowed_user_ids_rejects_empty():
 
 def test_settings_from_env_defaults(monkeypatch):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
-    monkeypatch.delenv("ALLOWED_TELEGRAM_USER_IDS", raising=False)
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123456789,987654321")
     monkeypatch.delenv("OUTPUT_FORMAT", raising=False)
     monkeypatch.delenv("YTDLP_COOKIES_FILE", raising=False)
     monkeypatch.delenv("YTDLP_COOKIES_B64", raising=False)
